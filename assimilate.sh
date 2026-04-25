@@ -4,15 +4,25 @@ set -e
 echo "Starting Assimilation..."
 echo "Resistance is futile."
 
-# 1. Detect Vendor from _Vendor_.txt (Mandatory for paths)
+# 1. Detect Vendor/Path from _Vendor-Sub_.txt or _Vendor_.txt
 VENDOR_MARKER=$(ls _*_.* 2>/dev/null | head -n 1)
 if [[ -z "$VENDOR_MARKER" ]]; then
-    echo "Error: No vendor marker (e.g., _FlexDSL_.txt) found."
+    echo "Error: No vendor marker found."
     exit 1
 fi
+
+# Step A: Strip underscores and extension
+# Example: _Nokia-Stellar_.txt -> Nokia-Stellar
+# Example: _FlexDSL_.txt       -> FlexDSL
 TEMP=${VENDOR_MARKER#_}
-VENDOR=${TEMP%_*}
-echo "Detected Vendor: $VENDOR"
+RAW_NAME=${TEMP%_*}
+
+# Step B: Replace ALL '-' with '/' and convert to lowercase
+# Example: Nokia-Stellar -> nokia/stellar
+# Example: FlexDSL       -> flexdsl
+VENDOR=$(echo "$RAW_NAME" | tr '-' '/' | tr '[:upper:]' '[:lower:]')
+
+echo "Final Assimilation Path: $VENDOR"
 
 # 2. The All-in-One Assimilation Function
 assimilate() {
@@ -30,12 +40,12 @@ assimilate() {
         # Copy and immediately chown in librenms_main
         docker cp "$raw_file" librenms_main:"$full_dest_path"
         docker exec -u 0 librenms_main chown librenms:librenms "$full_dest_path"
-		docker exec -u 0 librenms_main chmod 644 "$full_dest_path"
+        docker exec -u 0 librenms_main chmod 644 "$full_dest_path"
         
         if [[ "$targets" == "both" ]]; then
             docker cp "$raw_file" librenms_dispatcher:"$full_dest_path"
             docker exec -u 0 librenms_dispatcher chown librenms:librenms "$full_dest_path"
-			docker exec -u 0 librenms_dispatcher chmod 644 "$full_dest_path"
+            docker exec -u 0 librenms_dispatcher chmod 644 "$full_dest_path"
         fi
     fi
 }
@@ -76,15 +86,19 @@ done
 
 # 5. Consolidated Assimilation Calls
 # Just provide the prefix and the destination. The function does the rest.
-assimilate "icon_"         "$ICON_DEST"      "main"
-assimilate "logo_"         "$LOGO_DEST"      "main"
+assimilate "icon_"         "$ICON_DEST"      "both"
+assimilate "logo_"         "$LOGO_DEST"      "both"
 assimilate "os_detection_" "$YAML_DET_DEST"  "both"
 assimilate "os_discovery_" "$YAML_DISC_DEST" "both"
 assimilate "os_logic_"     "$PHP_DEST"       "both"
 
 # 6. Finalize collective state
 echo "Clearing cache..."
+echo "Clearing cache in FRONTEND"
 docker exec -u librenms librenms_main php lnms cache:clear
+echo "Clearing cache  in DISPATCHER SIDECAR"
+docker exec -u librenms librenms_dispatcher php lnms cache:clear
+
 
 # 7. Final Words.
 echo "Assimilation complete. $VENDOR is now part of the Collective."
