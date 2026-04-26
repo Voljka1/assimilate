@@ -1,105 +1,157 @@
 #!/bin/bash
 set -e
+# P.S. Actually, this is not a bash script, this is the BORG script now. :)
+# To prevent nasty bash tricks when nothing is found, we enable nullglob 
+# so that the array is empty instead of containing the pattern itself.
+shopt -s nullglob
 
-echo "Starting Assimilation..."
-echo "Resistance is futile."
+# Terminal (but not deadly) colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+BLUE='\033[0;34m'
+YELLOW='\033[0;33m'
+RESET='\033[0m'
 
-# 1. Detect Vendor/Path from _Vendor-Sub_.txt or _Vendor_.txt
-VENDOR_MARKER=$(ls _*_.* 2>/dev/null | head -n 1)
-if [[ -z "$VENDOR_MARKER" ]]; then
-    echo "Error: No vendor marker found."
-    exit 1
-fi
-
-# Step A: Strip underscores and extension
-# Example: _Nokia-Stellar_.txt -> Nokia-Stellar
-# Example: _FlexDSL_.txt       -> FlexDSL
-TEMP=${VENDOR_MARKER#_}
-RAW_NAME=${TEMP%_*}
-
-# Step B: Replace ALL '-' with '/' and convert to lowercase
-# Example: Nokia-Stellar -> nokia/stellar
-# Example: FlexDSL       -> flexdsl
-VENDOR=$(echo "$RAW_NAME" | tr '-' '/' | tr '[:upper:]' '[:lower:]')
-
-echo "Final Assimilation Path: $VENDOR"
-
-# 2. The All-in-One Assimilation Function
-assimilate() {
-    local prefix=$1
-    local dest_dir=$2
-    local targets=$3
-
-    local raw_file=$(ls ${prefix}* 2>/dev/null | head -n 1)
-
-    if [[ -n "$raw_file" ]]; then
-        local stripped_name=${raw_file#$prefix}
-        local full_dest_path="$dest_dir$stripped_name"
-        echo "Assimilating $raw_file -> $stripped_name"
-
-        # Copy and immediately chown in librenms_main
-        docker cp "$raw_file" librenms_main:"$full_dest_path"
-        docker exec -u 0 librenms_main chown librenms:librenms "$full_dest_path"
-        docker exec -u 0 librenms_main chmod 644 "$full_dest_path"
-        
-        if [[ "$targets" == "both" ]]; then
-            docker cp "$raw_file" librenms_dispatcher:"$full_dest_path"
-            docker exec -u 0 librenms_dispatcher chown librenms:librenms "$full_dest_path"
-            docker exec -u 0 librenms_dispatcher chmod 644 "$full_dest_path"
-        fi
-    fi
+# I said, I want more colours! More colours, more fun!
+error() {
+    printf '%b\n' "${RED}$1${RESET}"
 }
 
-# 3. Define Internal Container Paths
-MIB_DEST="/opt/librenms/mibs/$VENDOR/"
+warning() {
+    printf '%b\n' "${YELLOW}$1${RESET}"
+}
+
+info() {
+    printf '%b\n' "${BLUE}$1${RESET}"
+}
+
+BORG() {
+    printf '%b\n' "${GREEN}$1${RESET}"
+}
+
+# 0. Variable Initialization
+CONTAINERS_LIST="librenms_main,librenms_dispatcher"
+
+# Define Source MIBs Folder (keep your vendor mibs here)
+MIBS_SRC_DIR="mibs"
+# Define Source Prefixes for other file types
+ICONS_SRC_PREFIX="icon_"
+LOGOS_SRC_PREFIX="logo_"
+OS_DET_SRC_PREFIX="os_detection_"
+OS_DISC_SRC_PREFIX="os_discovery_"
+PHP_SRC_PREFIX="os_logic_"
+
+# Define Internal Container Paths (destinations)
+VENDOR=""
 ICON_DEST="/opt/librenms/html/images/os/"
 LOGO_DEST="/opt/librenms/html/images/logos/"
 YAML_DET_DEST="/opt/librenms/resources/definitions/os_detection/"
 YAML_DISC_DEST="/opt/librenms/resources/definitions/os_discovery/"
 PHP_DEST="/opt/librenms/LibreNMS/OS/"
 
-# 4. Mass Assimilate MIBs
-echo "Preparing Vendor MIB folder: $MIB_DEST"
+# 1. Greetings, Earthlings.
+BORG "Starting Assimilation..."
+BORG "Today it will be LibreNMS containers, tomorrow it will be the Collective."
+BORG "Resistance is futile."
 
-for container in librenms_main librenms_dispatcher; do
+# 2. Functions block
+# -----------------------------------------------------------------------------
+docker_exec_all() {
+    local user=$1
+    shift
+    for container in "${CONTAINERS[@]}"; do
+        docker exec -u "$user" "$container" "$@"
+    done
+}
+
+docker_cp_all() {
+    local src=$1
+    local dest=$2
+    for container in "${CONTAINERS[@]}"; do
+        docker cp "$src" "$container":"$dest"
+    done
+}
+
+assimilate() {
+    local prefix=$1
+    local dest_dir=$2
+
+    local raw_files=( "${prefix}"* )
+
+    if (( ${#raw_files[@]} == 0 )); then
+        return
+    fi
+
+    if (( ${#raw_files[@]} > 1 )); then
+        warning "Warning: multiple files found for prefix '$prefix' (${raw_files[*]}). Skipping copy."
+        return
+    fi
+
+    local raw_filename=${raw_files[0]}
+    local stripped_name="${raw_filename#"$prefix"}"
+    local full_dest_path="$dest_dir$stripped_name"
+
+    info "Assimilating $raw_filename -> $stripped_name"
+    docker_cp_all "$raw_filename" "$full_dest_path"
+    docker_exec_all 0 chown librenms:librenms "$full_dest_path"
+    docker_exec_all 0 chmod 644 "$full_dest_path"
+}
+# -----------------------------------------------------------------------------
+
+# 3. Detect Vendor/Path from filename
+# Filename format: Single file __Vendor-Sub__ or __Vendor__ with or without extension.
+#                  Vendor can have dashes which will be converted to slashes for subdirectories.
+#                  Result must be in the form of vendor/sub or vendor (all lowercase).
+VENDOR_FILES=( __*__* )
+[[ ${#VENDOR_FILES[@]} -gt 1 ]] && { error "Error: Multiple markers found: ${VENDOR_FILES[*]}"; exit 1; }
+# Extract name between __ markers, replace dashes with slashes, and lowercase
+if [[ "${VENDOR_FILES[0]}" =~ ^__(.+)__ ]]; then
+    VENDOR="${BASH_REMATCH[1]//-/\/}"
+    VENDOR="${VENDOR,,}"
+fi
+
+# 4. Container list support
+CONTAINERS_LIST=${CONTAINERS_LIST//[[:space:]]/}
+IFS=',' read -ra CONTAINERS <<< "$CONTAINERS_LIST"
+
+if [[ ${#CONTAINERS[@]} -eq 0 ]]; then
+    error "Error: CONTAINERS_LIST is empty."
+    exit 1
+fi
+
+# 5. Mass Assimilation of MIBs
+# Note to myself: I am not stealing, I just borrowing :)
+if [ -d "$MIBS_SRC_DIR" ] && [ -n "$VENDOR" ]; then
+    info "Assimilating MIB files for vendor: $VENDOR"
+    # Assign variable for MIB_DEST with the final VENDOR path
+    MIB_DEST="/opt/librenms/mibs/$VENDOR/"
+    info "Preparing Vendor MIB folder: $MIB_DEST"
     # Create the folder as the librenms user so the directory is owned correctly
-    docker exec -u librenms "$container" mkdir -p "$MIB_DEST"
-done
+    docker_exec_all librenms mkdir -p "$MIB_DEST"
+    for mib in "$MIBS_SRC_DIR"/*; do
+        mib_filename=$(basename "$mib")
+        dest_path="$MIB_DEST$mib_filename"
+        # Copy file (arrives as root)
+        docker_cp_all "$mib" "$dest_path"
+    done
+    # Apply permissions once for the whole directory to save time
+    docker_exec_all 0 chown -R librenms:librenms "$MIB_DEST"
+    docker_exec_all 0 chmod -R u=rwX,g=rX,o=rX "$MIB_DEST"
+fi
 
-echo "Assimilating MIB files..."
-for mib in mibs/*; do
-    mib_filename=$(basename "$mib")
-    dest_path="$MIB_DEST$mib_filename"
-    
-    # Copy file (arrives as root)
-    docker cp "$mib" librenms_main:"$dest_path"
-    docker cp "$mib" librenms_dispatcher:"$dest_path"
-    
-    # Surgical chown on the file ONLY
-    docker exec -u 0 librenms_main chown librenms:librenms "$dest_path"
-    docker exec -u 0 librenms_dispatcher chown librenms:librenms "$dest_path"
-	
-	# This makes directories 755 and files 644 automatically
-	docker exec -u 0 librenms_main chmod -R u=rwX,g=rX,o=rX "$MIB_DEST"
-	docker exec -u 0 librenms_dispatcher chmod -R u=rwX,g=rX,o=rX "$MIB_DEST"
-done
-
-# 5. Consolidated Assimilation Calls
+# 6. Consolidated Assimilation Calls
 # Just provide the prefix and the destination. The function does the rest.
-assimilate "icon_"         "$ICON_DEST"      "both"
-assimilate "logo_"         "$LOGO_DEST"      "both"
-assimilate "os_detection_" "$YAML_DET_DEST"  "both"
-assimilate "os_discovery_" "$YAML_DISC_DEST" "both"
-assimilate "os_logic_"     "$PHP_DEST"       "both"
+assimilate "$ICONS_SRC_PREFIX"      "$ICON_DEST"
+assimilate "$LOGOS_SRC_PREFIX"      "$LOGO_DEST"
+assimilate "$OS_DET_SRC_PREFIX"     "$YAML_DET_DEST"
+assimilate "$OS_DISC_SRC_PREFIX"    "$YAML_DISC_DEST"
+assimilate "$PHP_SRC_PREFIX"        "$PHP_DEST"
 
-# 6. Finalize collective state
-echo "Clearing cache..."
-echo "Clearing cache in FRONTEND"
-docker exec -u librenms librenms_main php lnms cache:clear
-echo "Clearing cache  in DISPATCHER SIDECAR"
-docker exec -u librenms librenms_dispatcher php lnms cache:clear
+# 7. Finalize collective state
+info "Clearing cache..."
+docker_exec_all librenms php lnms cache:clear
 
-
-# 7. Final Words.
-echo "Assimilation complete. $VENDOR is now part of the Collective."
-echo "Yours truly, 7 of 9."
+# 8. Final Words.
+BORG "Assimilation complete. $VENDOR is now part of the Collective."
+BORG "Your files now our files"
+BORG "Yours truly, 7 of 9."
