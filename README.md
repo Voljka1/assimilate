@@ -14,7 +14,7 @@ For the script to function, place it in a folder alongside your device files usi
 
 ```text
 .
-├── _pikard_.txt           # Vendor Marker (Mandatory: _VendorName_.txt)
+├── __pikard__.txt           # Vendor Marker (Mandatory: __VendorName__.txt)
 ├── assimilate.sh          # This script
 ├── mibs/                  # Folder containing all .mib files
 ├── icon_myos.svg          # OS Icon (prefix: icon_)
@@ -45,7 +45,7 @@ chmod +x assimilate.sh
 
 ## 🤖 What the Script Does
 
-1.  **Vendor Detection:** Parses the `_*_.txt` file to determine the vendor name.
+1.  **Vendor Detection:** Parses the `__*__.txt` file to determine the vendor name.
 2.  **MIB Injection:** Creates the vendor directory in both containers and moves all files from the local `mibs/` folder, setting permissions to `644`.
 3.  **Component Mapping:**
     * `icon_*` ➡️ `/opt/librenms/html/images/os/`
