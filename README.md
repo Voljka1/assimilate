@@ -33,7 +33,7 @@ For the script to function, place it in a folder alongside your device files usi
 
 ### 2. Preparation
 Ensure you have a vendor marker file in the directory. The script uses this to create the MIB subdirectory.
-* Example: `touch _Cisco_.txt` will result in MIBs being placed in `/opt/librenms/mibs/Cisco/`.
+* Example: `touch __Cisco__` will result in MIBs being placed in `/opt/librenms/mibs/Cisco/`.
 
 ### 3. Execution
 Run the script from within the folder containing your files:
